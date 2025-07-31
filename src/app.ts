@@ -8,6 +8,7 @@ import connectDB from "./config/db";
 import authRoutes from "./modules/auth/auth.routes";
 import walletRoutes from "./modules/wallet/wallet.routes";
 import transactionRoutes from "./modules/transaction/transaction.routes";
+import adminRoutes from './modules/user/user.routes';
 
 dotenv.config();
 const app = express();
@@ -21,6 +22,7 @@ app.use(cookieParser());
 app.use("/api/auth", authRoutes);
 app.use("/api/wallets", walletRoutes);
 app.use("/api/transactions", transactionRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Root test route
 app.get("/", (req, res) => {
