@@ -13,11 +13,14 @@ export const register = async (req: Request, res: Response) => {
       return res.status(409).json({ message: "Username already exists" });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
+    const approval = role === "agent" ? false : true;
     const newUser = await User.create({
       username,
       password: hashedPassword,
       role,
+      isApproved: approval,
     });
+
     await Wallet.create({ user: newUser._id, balance: 50 });
     res.status(201).json({ message: "Registration successful" });
   } catch (error) {

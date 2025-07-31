@@ -51,3 +51,22 @@ export const setWalletBlocked = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+export const updateAgentApproval = async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { approve } = req.body;
+
+    const agent = await User.findById(userId);
+    if (!agent || agent.role !== 'agent') {
+      return res.status(404).json({ message: 'Agent not found' });
+    }
+
+    agent.isApproved = approve;
+    await agent.save();
+
+    res.status(200).json({ message: `Agent has been ${approve ? 'approved' : 'suspended'}` });
+  } catch {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
