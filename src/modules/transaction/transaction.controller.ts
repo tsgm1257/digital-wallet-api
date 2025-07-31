@@ -52,3 +52,21 @@ export const sendMoney = async (
     res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+export const getMyTransactions = async (
+  req: Request & { user?: { userId: string } },
+  res: Response
+) => {
+  try {
+    const transactions = await Transaction.find({
+      $or: [{ sender: req.user?.userId }, { receiver: req.user?.userId }],
+    })
+      .sort({ createdAt: -1 })
+      .populate('sender', 'username')
+      .populate('receiver', 'username');
+
+    res.status(200).json(transactions);
+  } catch (error) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
