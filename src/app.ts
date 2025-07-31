@@ -4,6 +4,8 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import connectDB from './config/db';
 
+import authRoutes from './modules/auth/auth.routes';
+
 dotenv.config();
 const app = express();
 
@@ -11,6 +13,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
+
+// Routes
+app.use('/api/auth', authRoutes);
 
 // Root test route
 app.get('/', (req, res) => {
