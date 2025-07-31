@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import User from "../user/user.model";
 import Wallet from "../wallet/wallet.model";
 import { registerSchema, loginSchema } from "./auth.validation";
+import { env } from "../../config/env";
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -62,11 +63,14 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const token = jwt.sign(
-      { userId: user._id, role: user.role },
-      process.env.JWT_SECRET as string,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
-    );
+    const payload = {
+      userId: user._id,
+      role: user.role,
+    };
+
+    const token = jwt.sign(payload, env.JWT_SECRET, {
+      expiresIn: env.JWT_EXPIRES_IN,
+    } as jwt.SignOptions);
 
     res.status(200).json({
       message: "Login successful",
