@@ -1,10 +1,12 @@
-import express from 'express';
-import cors from 'cors';
-import cookieParser from 'cookie-parser';
-import dotenv from 'dotenv';
-import connectDB from './config/db';
+import express from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import dotenv from "dotenv";
+import connectDB from "./config/db";
 
-import authRoutes from './modules/auth/auth.routes';
+// Import routes
+import authRoutes from "./modules/auth/auth.routes";
+import walletRoutes from "./modules/wallet/wallet.routes";
 
 dotenv.config();
 const app = express();
@@ -15,11 +17,12 @@ app.use(express.json());
 app.use(cookieParser());
 
 // Routes
-app.use('/api/auth', authRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/wallets", walletRoutes);
 
 // Root test route
-app.get('/', (req, res) => {
-  res.send('Digital Wallet API is running!');
+app.get("/", (req, res) => {
+  res.send("Digital Wallet API is running!");
 });
 
 // Start server after DB connection
