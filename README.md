@@ -82,6 +82,9 @@ npm run dev
 
 The server will be running at `http://localhost:5000/`.
 
+Live deployment:
+https://digital-wallet-api.vercel.app/
+
 ## API Endpoints
 
 ### Authentication
