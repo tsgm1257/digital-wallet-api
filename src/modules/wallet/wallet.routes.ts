@@ -1,8 +1,6 @@
 import express from 'express';
 import { authenticate, authorize } from '../../middlewares/auth.middleware';
-import { getMyWallet } from './wallet.controller';
-import { addMoney } from './wallet.controller';
-import { withdrawMoney } from './wallet.controller';
+import { getMyWallet, addMoney, withdrawMoney } from './wallet.controller';
 
 
 const router = express.Router();

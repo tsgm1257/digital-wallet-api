@@ -70,3 +70,83 @@ export const getMyTransactions = async (
     res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+export const cashIn = async (
+  req: Request & { user?: { userId: string; role: string } },
+  res: Response
+) => {
+  try {
+    const { username, amount } = req.body;
+
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ message: 'Amount must be a positive number' });
+    }
+
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const wallet = await Wallet.findOne({ user: user._id });
+    if (!wallet || wallet.isBlocked) {
+      return res.status(403).json({ message: 'Wallet is blocked or not found' });
+    }
+
+    wallet.balance += amount;
+    await wallet.save();
+
+    await Transaction.create({
+      sender: req.user?.userId,
+      receiver: user._id,
+      amount,
+      type: 'deposit',
+      status: 'completed',
+    });
+
+    res.status(200).json({ message: 'Cash-in successful' });
+  } catch (error) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+export const cashOut = async (
+  req: Request & { user?: { userId: string; role: string } },
+  res: Response
+) => {
+  try {
+    const { username, amount } = req.body;
+
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ message: 'Amount must be a positive number' });
+    }
+
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const wallet = await Wallet.findOne({ user: user._id });
+    if (!wallet || wallet.isBlocked) {
+      return res.status(403).json({ message: 'Wallet is blocked or not found' });
+    }
+
+    if (wallet.balance < amount) {
+      return res.status(400).json({ message: 'Insufficient balance in user wallet' });
+    }
+
+    wallet.balance -= amount;
+    await wallet.save();
+
+    await Transaction.create({
+      sender: user._id,
+      receiver: req.user?.userId,
+      amount,
+      type: 'withdraw',
+      status: 'completed',
+    });
+
+    res.status(200).json({ message: 'Cash-out successful' });
+  } catch (error) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
