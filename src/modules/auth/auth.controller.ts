@@ -1,19 +1,30 @@
 import { Request, Response } from "express";
-import bcrypt from "bcrypt";
+import bcrypt, { compare } from "bcrypt";
+import jwt from "jsonwebtoken";
 import User from "../user/user.model";
 import Wallet from "../wallet/wallet.model";
-import jwt from "jsonwebtoken";
-import { compare } from "bcrypt";
+import { registerSchema, loginSchema } from "./auth.validation";
 
 export const register = async (req: Request, res: Response) => {
   try {
-    const { username, password, role } = req.body;
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid input",
+        errors: parsed.error.flatten(),
+      });
+    }
+
+    const { username, password, role } = parsed.data;
+
     const existingUser = await User.findOne({ username });
     if (existingUser) {
       return res.status(409).json({ message: "Username already exists" });
     }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const approval = role === "agent" ? false : true;
+
     const newUser = await User.create({
       username,
       password: hashedPassword,
@@ -22,6 +33,7 @@ export const register = async (req: Request, res: Response) => {
     });
 
     await Wallet.create({ user: newUser._id, balance: 50 });
+
     res.status(201).json({ message: "Registration successful" });
   } catch (error) {
     res.status(500).json({ message: "Internal server error" });
@@ -30,7 +42,15 @@ export const register = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-    const { username, password } = req.body;
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid input",
+        errors: parsed.error.flatten(),
+      });
+    }
+
+    const { username, password } = parsed.data;
 
     const user = await User.findOne({ username });
     if (!user) {

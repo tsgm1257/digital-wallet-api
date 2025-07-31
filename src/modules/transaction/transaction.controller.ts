@@ -1,39 +1,47 @@
-import { Request, Response } from 'express';
-import Wallet from '../wallet/wallet.model';
-import User from '../user/user.model';
-import Transaction from './transaction.model';
+import { Request, Response } from "express";
+import Wallet from "../wallet/wallet.model";
+import User from "../user/user.model";
+import Transaction from "./transaction.model";
+import { transactionSchema, sendMoneySchema } from "./transaction.validation";
 
 export const sendMoney = async (
   req: Request & { user?: { userId: string } },
   res: Response
 ) => {
   try {
-    const { recipientUsername, amount } = req.body;
-
-    if (typeof amount !== 'number' || amount <= 0) {
-      return res.status(400).json({ message: 'Amount must be a positive number' });
+    const parsed = sendMoneySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid input",
+        errors: parsed.error.flatten(),
+      });
     }
+
+    const { recipientUsername, amount } = parsed.data;
 
     const senderWallet = await Wallet.findOne({ user: req.user?.userId });
     if (!senderWallet || senderWallet.isBlocked) {
-      return res.status(403).json({ message: 'Sender wallet is blocked or not found' });
+      return res
+        .status(403)
+        .json({ message: "Sender wallet is blocked or not found" });
     }
 
     if (senderWallet.balance < amount) {
-      return res.status(400).json({ message: 'Insufficient balance' });
+      return res.status(400).json({ message: "Insufficient balance" });
     }
 
     const receiverUser = await User.findOne({ username: recipientUsername });
     if (!receiverUser) {
-      return res.status(404).json({ message: 'Recipient not found' });
+      return res.status(404).json({ message: "Recipient not found" });
     }
 
     const receiverWallet = await Wallet.findOne({ user: receiverUser._id });
     if (!receiverWallet || receiverWallet.isBlocked) {
-      return res.status(403).json({ message: 'Recipient wallet is blocked or not found' });
+      return res
+        .status(403)
+        .json({ message: "Recipient wallet is blocked or not found" });
     }
 
-    // Perform atomic transaction
     senderWallet.balance -= amount;
     receiverWallet.balance += amount;
     await senderWallet.save();
@@ -43,13 +51,13 @@ export const sendMoney = async (
       sender: req.user?.userId,
       receiver: receiverUser._id,
       amount,
-      type: 'send',
-      status: 'completed',
+      type: "send",
+      status: "completed",
     });
 
-    res.status(200).json({ message: 'Money sent successfully' });
+    res.status(200).json({ message: "Money sent successfully" });
   } catch (error) {
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -62,12 +70,12 @@ export const getMyTransactions = async (
       $or: [{ sender: req.user?.userId }, { receiver: req.user?.userId }],
     })
       .sort({ createdAt: -1 })
-      .populate('sender', 'username')
-      .populate('receiver', 'username');
+      .populate("sender", "username")
+      .populate("receiver", "username");
 
     res.status(200).json(transactions);
   } catch (error) {
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -76,20 +84,26 @@ export const cashIn = async (
   res: Response
 ) => {
   try {
-    const { username, amount } = req.body;
-
-    if (typeof amount !== 'number' || amount <= 0) {
-      return res.status(400).json({ message: 'Amount must be a positive number' });
+    const parsed = transactionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid input",
+        errors: parsed.error.flatten(),
+      });
     }
+
+    const { username, amount } = parsed.data;
 
     const user = await User.findOne({ username });
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
 
     const wallet = await Wallet.findOne({ user: user._id });
     if (!wallet || wallet.isBlocked) {
-      return res.status(403).json({ message: 'Wallet is blocked or not found' });
+      return res
+        .status(403)
+        .json({ message: "Wallet is blocked or not found" });
     }
 
     wallet.balance += amount;
@@ -99,13 +113,13 @@ export const cashIn = async (
       sender: req.user?.userId,
       receiver: user._id,
       amount,
-      type: 'deposit',
-      status: 'completed',
+      type: "deposit",
+      status: "completed",
     });
 
-    res.status(200).json({ message: 'Cash-in successful' });
+    res.status(200).json({ message: "Cash-in successful" });
   } catch (error) {
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -114,24 +128,32 @@ export const cashOut = async (
   res: Response
 ) => {
   try {
-    const { username, amount } = req.body;
-
-    if (typeof amount !== 'number' || amount <= 0) {
-      return res.status(400).json({ message: 'Amount must be a positive number' });
+    const parsed = transactionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid input",
+        errors: parsed.error.flatten(),
+      });
     }
+
+    const { username, amount } = parsed.data;
 
     const user = await User.findOne({ username });
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
 
     const wallet = await Wallet.findOne({ user: user._id });
     if (!wallet || wallet.isBlocked) {
-      return res.status(403).json({ message: 'Wallet is blocked or not found' });
+      return res
+        .status(403)
+        .json({ message: "Wallet is blocked or not found" });
     }
 
     if (wallet.balance < amount) {
-      return res.status(400).json({ message: 'Insufficient balance in user wallet' });
+      return res
+        .status(400)
+        .json({ message: "Insufficient balance in user wallet" });
     }
 
     wallet.balance -= amount;
@@ -141,12 +163,12 @@ export const cashOut = async (
       sender: user._id,
       receiver: req.user?.userId,
       amount,
-      type: 'withdraw',
-      status: 'completed',
+      type: "withdraw",
+      status: "completed",
     });
 
-    res.status(200).json({ message: 'Cash-out successful' });
+    res.status(200).json({ message: "Cash-out successful" });
   } catch (error) {
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
