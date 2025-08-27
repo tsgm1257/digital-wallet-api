@@ -23,6 +23,24 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
+// --- Welcome route (Option A) ---
+app.get("/", (_req: Request, res: Response) => {
+  res.json({
+    name: "Digital Wallet API",
+    status: "OK",
+    message: "Welcome! Explore the API using the endpoints below.",
+    endpoints: {
+      health: "/health",
+      auth: "/api/auth",
+      wallet: "/api/wallet",
+      transactions: "/api/transactions",
+      admin: "/api/admin",
+      profile: "/api/profile",
+      usersLookupAlias: "/api/users/lookup",
+    },
+  });
+});
+
 // --- Health ---
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ ok: true, env: process.env.NODE_ENV ?? "dev" });
