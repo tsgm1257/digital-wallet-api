@@ -2,12 +2,13 @@ import { Request, Response } from "express";
 import bcrypt, { compare } from "bcrypt";
 import jwt from "jsonwebtoken";
 import User from "../user/user.model";
-import Wallet from "../wallet/wallet.model";
-import { registerSchema, loginSchema } from "./auth.validation";
+import { loginSchema, registerSchema } from "./auth.validation";
 import { env } from "../../config/env";
 
+// POST /api/auth/register
 export const register = async (req: Request, res: Response) => {
   try {
+    // 1) Validate input
     const parsed = registerSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({
@@ -15,34 +16,48 @@ export const register = async (req: Request, res: Response) => {
         errors: parsed.error.flatten(),
       });
     }
+    const { username, password, role = "user", email, phone } = parsed.data;
 
-    const { username, password, role } = parsed.data;
-
-    const existingUser = await User.findOne({ username });
-    if (existingUser) {
+    // 2) Ensure unique username
+    const existing = await User.findOne({ username });
+    if (existing) {
       return res.status(409).json({ message: "Username already exists" });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const approval = role === "agent" ? false : true;
+    // 3) Hash password
+    const hashed = await bcrypt.hash(password, 10);
 
-    const newUser = await User.create({
+    // 4) Agents require approval; others auto-approved
+    const isApproved = role === "agent" ? false : true;
+
+    // 5) Create user
+    const user = await User.create({
       username,
-      password: hashedPassword,
+      password: hashed,
       role,
-      isApproved: approval,
+      email,
+      phone,
+      isApproved,
     });
 
-    await Wallet.create({ user: newUser._id, balance: 50 });
-
-    res.status(201).json({ message: "Registration successful" });
-  } catch (error) {
-    res.status(500).json({ message: "Internal server error" });
+    // 6) Respond
+    return res.status(201).json({
+      message: "Registration successful",
+      user: { id: user._id, username: user.username, role: user.role },
+    });
+  } catch (err: any) {
+    console.error("Register error:", err);
+    return res.status(500).json({
+      message: "Internal server error",
+      error: err?.message,
+    });
   }
 };
 
+// POST /api/auth/login
 export const login = async (req: Request, res: Response) => {
   try {
+    // 1) Validate shape
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({
@@ -53,30 +68,35 @@ export const login = async (req: Request, res: Response) => {
 
     const { username, password } = parsed.data;
 
-    const user = await User.findOne({ username });
+    // 2) Find user + ensure password selected for compare
+    const user = await User.findOne({ username }).select("+password");
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const isPasswordValid = await compare(password, user.password);
-    if (!isPasswordValid) {
+    // 3) Compare password
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const payload = {
-      userId: user._id,
-      role: user.role,
-    };
+    // 4) Agent approval gate
+    if (user.role === "agent" && !user.isApproved) {
+      return res.status(403).json({ message: "Agent not approved yet" });
+    }
 
-    const token = jwt.sign(payload, env.JWT_SECRET, {
-      expiresIn: env.JWT_EXPIRES_IN,
-    } as jwt.SignOptions);
+    // 5) Issue JWT
+    const token = jwt.sign(
+      { userId: user._id.toString(), role: user.role },
+      env.JWT_SECRET,
+      { expiresIn: env.JWT_EXPIRES_IN }
+    );
 
-    res.status(200).json({
-      message: "Login successful",
-      token,
-    });
-  } catch (error) {
-    res.status(500).json({ message: "Internal server error" });
+    return res.status(200).json({ message: "Login successful", token });
+  } catch (err: any) {
+    console.error("Login error:", err);
+    return res
+      .status(500)
+      .json({ message: "Internal server error", error: err?.message });
   }
 };
