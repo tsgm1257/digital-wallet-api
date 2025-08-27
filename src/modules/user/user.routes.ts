@@ -1,15 +1,20 @@
-import express from "express";
+import { Router } from "express";
+import { authenticate, authorize } from "../../middlewares/auth.middleware";
 import {
+  getAdminStats,
   getAllUsers,
   getAllWallets,
   getAllTransactions,
   setWalletBlocked,
   updateAgentApproval,
 } from "./user.controller";
-import { authenticate, authorize } from "../../middlewares/auth.middleware";
 
-const router = express.Router();
+const router = Router();
 
+// KPI stats
+router.get("/stats", authenticate, authorize("admin"), getAdminStats);
+
+// Lists
 router.get("/all", authenticate, authorize("admin"), getAllUsers);
 router.get("/wallets", authenticate, authorize("admin"), getAllWallets);
 router.get(
@@ -18,11 +23,20 @@ router.get(
   authorize("admin"),
   getAllTransactions
 );
+
+// Actions
 router.patch(
   "/wallets/:walletId/block",
   authenticate,
   authorize("admin"),
   setWalletBlocked
+);
+
+router.patch(
+  "/agents/:userId/approval",
+  authenticate,
+  authorize("admin"),
+  updateAgentApproval
 );
 router.patch(
   "/agents/:userId/approve",
