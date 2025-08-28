@@ -10,7 +10,7 @@ import {
   cashOutSchema,
 } from "./transaction.validation";
 
-/** Resolve the authenticated caller to a User doc (supports userId | id | _id | username | email). */
+/** Resolve the authenticated caller to a User doc */
 async function resolveCallerUser(req: Request) {
   const u: any = (req as any).user || {};
   const id = u.userId || u.id || u._id;
@@ -40,7 +40,7 @@ async function ensureWallet(userId: mongoose.Types.ObjectId | string) {
   );
 }
 
-/** Utility: find a recipient by flexible identifier (username, @username, email, phone, or raw ObjectId). */
+/** Utility: find a recipient by flexible identifier */
 async function findRecipient(identifier: string) {
   const clean = identifier.startsWith("@") ? identifier.slice(1) : identifier;
 
@@ -62,20 +62,63 @@ async function findRecipient(identifier: string) {
 
 /**
  * GET /transactions/me
- * Return caller's transactions (as sender or receiver), newest first
+ * Return caller's transactions with pagination and filters
  */
 export const getMyTransactions = async (req: Request, res: Response) => {
   try {
     const caller = await resolveCallerUser(req);
     if (!caller) return res.status(401).json({ message: "Unauthorized" });
 
-    const txs = await Transaction.find({
-      $or: [{ sender: caller._id }, { receiver: caller._id }],
-    })
-      .sort({ createdAt: -1 })
-      .limit(200);
+    // Parse query parameters
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
+    const type = req.query.type as string;
+    const dateFrom = req.query.dateFrom as string;
+    const dateTo = req.query.dateTo as string;
 
-    return res.json({ count: txs.length, transactions: txs });
+    // Build filter query
+    const filter: any = {
+      $or: [{ sender: caller._id }, { receiver: caller._id }],
+    };
+
+    if (type && ["send", "withdraw", "deposit"].includes(type)) {
+      filter.type = type;
+    }
+
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) {
+        filter.createdAt.$gte = new Date(dateFrom);
+      }
+      if (dateTo) {
+        filter.createdAt.$lte = new Date(dateTo + "T23:59:59.999Z");
+      }
+    }
+
+    // Calculate skip
+    const skip = (page - 1) * limit;
+
+    // Get total count
+    const total = await Transaction.countDocuments(filter);
+
+    // Get transactions with population
+    const data = await Transaction.find(filter)
+      .populate("sender", "username email _id")
+      .populate("receiver", "username email _id")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    // Calculate total pages
+    const totalPages = Math.ceil(total / limit);
+
+    return res.json({
+      data,
+      page,
+      limit,
+      total,
+      totalPages,
+    });
   } catch (err) {
     console.error("getMyTransactions error:", err);
     return res.status(500).json({ message: "Internal server error" });
@@ -84,7 +127,6 @@ export const getMyTransactions = async (req: Request, res: Response) => {
 
 /**
  * POST /transactions/send  (user → user)
- * Body: { recipient: string | username, amount: number }
  */
 export const sendMoney = async (req: Request, res: Response) => {
   const parsed = (
@@ -141,8 +183,8 @@ export const sendMoney = async (req: Request, res: Response) => {
       amount,
       sender: sender._id,
       receiver: receiver._id,
-      type: "send", // 👈 matches your frontend enum
-      status: "completed", // 👈 matches your frontend enum
+      type: "send",
+      status: "completed",
     });
 
     return res.status(201).json({
@@ -167,8 +209,6 @@ export const sendMoney = async (req: Request, res: Response) => {
 
 /**
  * POST /transactions/cash-in  (agent/admin → user)
- * Body: { username, amount } OR { userId, amount }
- * Effect: agent balance -= amount, user balance += amount
  */
 export const cashIn = async (req: Request, res: Response) => {
   const parsed = cashInSchema.safeParse(req.body);
@@ -239,9 +279,92 @@ export const cashIn = async (req: Request, res: Response) => {
 };
 
 /**
+ * GET /transactions (admin only)
+ * Get all transactions with filters and pagination
+ */
+export const getAllTransactions = async (req: Request, res: Response) => {
+  try {
+    // Parse query parameters
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
+    const type = req.query.type as string;
+    const status = req.query.status as string;
+    const dateFrom = req.query.dateFrom as string;
+    const dateTo = req.query.dateTo as string;
+    const userId = req.query.userId as string;
+    const minAmount = parseFloat(req.query.minAmount as string);
+    const maxAmount = parseFloat(req.query.maxAmount as string);
+
+    // Build filter query
+    const filter: any = {};
+
+    if (type && ["send", "withdraw", "deposit"].includes(type)) {
+      filter.type = type;
+    }
+
+    if (status && ["completed", "failed"].includes(status)) {
+      filter.status = status;
+    }
+
+    if (userId && mongoose.isValidObjectId(userId)) {
+      filter.$or = [
+        { sender: new mongoose.Types.ObjectId(userId) },
+        { receiver: new mongoose.Types.ObjectId(userId) },
+      ];
+    }
+
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) {
+        filter.createdAt.$gte = new Date(dateFrom);
+      }
+      if (dateTo) {
+        filter.createdAt.$lte = new Date(dateTo + "T23:59:59.999Z");
+      }
+    }
+
+    if (!isNaN(minAmount) || !isNaN(maxAmount)) {
+      filter.amount = {};
+      if (!isNaN(minAmount)) {
+        filter.amount.$gte = minAmount;
+      }
+      if (!isNaN(maxAmount)) {
+        filter.amount.$lte = maxAmount;
+      }
+    }
+
+    // Calculate skip
+    const skip = (page - 1) * limit;
+
+    // Get total count
+    const total = await Transaction.countDocuments(filter);
+
+    // Get transactions with population
+    const data = await Transaction.find(filter)
+      .populate("sender", "username email role _id")
+      .populate("receiver", "username email role _id")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    // Calculate total pages
+    const totalPages = Math.ceil(total / limit);
+
+    return res.json({
+      data,
+      page,
+      limit,
+      total,
+      totalPages,
+    });
+  } catch (err) {
+    console.error("getAllTransactions error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
  * POST /transactions/cash-out  (user → agent/admin)
- * Body: { username, amount } OR { userId, amount }
- * Effect: user balance -= amount, agent balance += amount
  */
 export const cashOut = async (req: Request, res: Response) => {
   const parsed = cashOutSchema.safeParse(req.body);
