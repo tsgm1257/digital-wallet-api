@@ -10,8 +10,8 @@ export interface IUser {
   isApproved: boolean;
 
   // ⬇️ add these optional fields
-  email?: string | null;
-  phone?: string | null;
+  email?: string;
+  phone?: string;
 }
 
 const userSchema = new Schema<IUser>(
@@ -26,17 +26,18 @@ const userSchema = new Schema<IUser>(
       type: String,
       trim: true,
       lowercase: true,
-      index: true,
-      default: null,
+      // Note: do not set a default to avoid storing null
     },
-    phone: { type: String, trim: true, index: true, default: null },
+    phone: { type: String, trim: true },
   },
   { timestamps: true }
 );
 
-// (optional) unique constraints if you want uniqueness
-// userSchema.index({ email: 1 }, { unique: true, partialFilterExpression: { email: { $type: "string" } } });
-// userSchema.index({ phone: 1 }, { unique: true, partialFilterExpression: { phone: { $type: "string" } } });
+// Ensure email is unique only when present (avoid duplicate null/undefined conflicts)
+userSchema.index(
+  { email: 1 },
+  { unique: true, partialFilterExpression: { email: { $type: "string" } } }
+);
 
 export type UserDoc = HydratedDocument<IUser>;
 const User = model<IUser>("User", userSchema);
