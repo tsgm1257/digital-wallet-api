@@ -1,249 +1,200 @@
+// src/modules/transaction/transaction.controller.ts
 import { Request, Response } from "express";
-import Wallet from "../wallet/wallet.model";
 import User from "../user/user.model";
+import Wallet from "../wallet/wallet.model";
 import Transaction from "./transaction.model";
-import { transactionSchema, sendMoneySchema } from "./transaction.validation";
+import { cashInSchema, cashOutSchema } from "./transaction.validation";
 
-type Role = "user" | "agent" | "admin";
-type Authed = Request & { user?: { userId: string; role?: Role } };
-
-const normalizePhone = (p?: string) => {
-  if (!p) return undefined;
-  const digits = p.replace(/\D+/g, "");
-  return digits || undefined;
-};
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const findUserByAny = async (raw: string) => {
-  const trimmed = raw.trim();
-  const withoutAt = trimmed.replace(/^@+/, "");
-  const phone = normalizePhone(trimmed);
-  const email = trimmed.toLowerCase();
-  const usernameCI = new RegExp("^" + escapeRegex(withoutAt) + "$", "i");
-
-  return User.findOne({
-    $or: [{ username: usernameCI }, { email }, ...(phone ? [{ phone }] : [])],
-  });
-};
-
-// ---------- GET /api/transactions/me ----------
-export const getMyTransactions = async (req: Authed, res: Response) => {
+/**
+ * CASH IN (agent -> user):
+ * - Decrement agent wallet
+ * - Increment user wallet
+ * - Record transaction (sender = agent, receiver = user)
+ */
+export const cashIn = async (req: Request, res: Response) => {
   try {
-    if (!req.user?.userId)
-      return res.status(401).json({ message: "Unauthorized" });
-    const {
-      page = "1",
-      limit = "10",
-      type,
-      dateFrom,
-      dateTo,
-    } = req.query as any;
-
-    const pageNum = Math.max(1, Number(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, Number(limit) || 10));
-
-    const q: any = {
-      $or: [{ sender: req.user.userId }, { receiver: req.user.userId }],
-    };
-    if (type) q.type = type;
-    if (dateFrom || dateTo) {
-      q.createdAt = {};
-      if (dateFrom) q.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) {
-        const end = new Date(dateTo);
-        end.setHours(23, 59, 59, 999);
-        q.createdAt.$lte = end;
-      }
-    }
-
-    const base = Transaction.find(q)
-      .sort({ createdAt: -1 })
-      .populate("sender", "username")
-      .populate("receiver", "username");
-
-    const [data, total] = await Promise.all([
-      base.skip((pageNum - 1) * limitNum).limit(limitNum),
-      Transaction.countDocuments(q),
-    ]);
-
-    return res.status(200).json({
-      data,
-      page: pageNum,
-      limit: limitNum,
-      total,
-      totalPages: Math.ceil(total / limitNum),
-    });
-  } catch {
-    return res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-// ---------- POST /api/transactions/send (user → user) ----------
-export const sendMoney = async (req: Authed, res: Response) => {
-  try {
-    if (!req.user?.userId)
-      return res.status(401).json({ message: "Unauthorized" });
-
-    const parsed = sendMoneySchema.safeParse(req.body);
+    const parsed = cashInSchema.safeParse(req.body);
     if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid input",
+        errors: parsed.error.flatten(),
+      });
+    }
+
+    const { userId, amount } = parsed.data;
+
+    // Target user (receiver)
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ message: "Target user not found" });
+    }
+
+    // Receiver wallet (create if missing)
+    const userWallet =
+      (await Wallet.findOne({ user: targetUser._id })) ||
+      (await Wallet.create({ user: targetUser._id, balance: 0 }));
+
+    if (userWallet.isBlocked) {
+      return res.status(403).json({ message: "User wallet is blocked" });
+    }
+
+    // Agent wallet (sender = authenticated caller)
+    const agentId = (req as any)?.user?.userId;
+    if (!agentId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const agentWallet =
+      (await Wallet.findOne({ user: agentId })) ||
+      (await Wallet.create({ user: agentId, balance: 0 }));
+
+    if (agentWallet.isBlocked) {
+      return res.status(403).json({ message: "Agent wallet is blocked" });
+    }
+
+    // Ensure the agent has enough float
+    if (agentWallet.balance < amount) {
       return res
         .status(400)
-        .json({ message: "Invalid input", errors: parsed.error.flatten() });
+        .json({ message: "Agent has insufficient balance" });
     }
 
-    const receiverUser = await findUserByAny(parsed.data.recipient);
-    if (!receiverUser) {
-      return res
-        .status(404)
-        .json({
-          message:
-            "Recipient not found. Use @username, email, or digits-only phone.",
-        });
-    }
-    if (receiverUser._id.equals(req.user.userId)) {
-      return res
-        .status(400)
-        .json({ message: "You cannot send money to yourself." });
-    }
-
-    const amount = parsed.data.amount;
-
-    const senderWallet = await Wallet.findOne({ user: req.user.userId });
-    if (!senderWallet)
-      return res.status(403).json({ message: "Your wallet is unavailable" });
-    if (senderWallet.isBlocked)
-      return res.status(403).json({ message: "Your wallet is blocked" });
-    if (senderWallet.balance < amount) {
-      return res.status(400).json({ message: "Insufficient balance" });
-    }
-
-    const receiverWallet =
-      (await Wallet.findOne({ user: receiverUser._id })) ||
-      (await Wallet.create({ user: receiverUser._id, balance: 0 }));
-    if (receiverWallet.isBlocked) {
-      return res.status(403).json({ message: "Recipient wallet is blocked" });
-    }
-
+    // 1) decrement agent, 2) increment user
     await Wallet.updateOne(
-      { _id: senderWallet._id },
+      { _id: agentWallet._id },
       { $inc: { balance: -amount } }
     );
+
     await Wallet.updateOne(
-      { _id: receiverWallet._id },
+      { _id: userWallet._id },
       { $inc: { balance: amount } }
     );
 
-    await Transaction.create({
-      sender: req.user.userId,
-      receiver: receiverUser._id,
+    // Log transaction
+    const tx = await Transaction.create({
       amount,
-      type: "send",
-      status: "completed",
+      sender: agentId,
+      receiver: targetUser._id,
+      type: "CASH_IN",
+      status: "COMPLETED",
     });
 
-    return res.status(200).json({ message: "Transfer successful" });
-  } catch {
+    // Return minimal info
+    const [freshAgentWallet, freshUserWallet] = await Promise.all([
+      Wallet.findById(agentWallet._id),
+      Wallet.findById(userWallet._id),
+    ]);
+
+    return res.status(201).json({
+      message: "Cash-in successful",
+      transaction: tx,
+      agentWallet: {
+        id: freshAgentWallet?._id,
+        balance: freshAgentWallet?.balance,
+      },
+      userWallet: {
+        id: freshUserWallet?._id,
+        balance: freshUserWallet?.balance,
+      },
+    });
+  } catch (err) {
+    console.error("cashIn error:", err);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
 
-// ---------- POST /api/transactions/cash-in (agent/admin → user) ----------
-export const cashIn = async (req: Authed, res: Response) => {
+/**
+ * CASH OUT (user -> agent):
+ * - Decrement user wallet
+ * - Increment agent wallet
+ * - Record transaction (sender = user, receiver = agent)
+ */
+export const cashOut = async (req: Request, res: Response) => {
   try {
-    if (!req.user?.userId)
-      return res.status(401).json({ message: "Unauthorized" });
-
-    // Accept both { username, amount } or { recipient, amount }
-    const rawUser = (req.body?.username ?? req.body?.recipient) as
-      | string
-      | undefined;
-    const amtRaw = req.body?.amount;
-    const parsed = transactionSchema.safeParse({
-      username: rawUser,
-      amount: amtRaw,
-    });
+    const parsed = cashOutSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ message: "Invalid input", errors: parsed.error.flatten() });
+      return res.status(400).json({
+        message: "Invalid input",
+        errors: parsed.error.flatten(),
+      });
     }
 
-    const target = await findUserByAny(parsed.data.username);
-    if (!target) return res.status(404).json({ message: "User not found" });
+    const { userId, amount } = parsed.data;
 
-    const wallet =
-      (await Wallet.findOne({ user: target._id })) ||
-      (await Wallet.create({ user: target._id, balance: 0 }));
-    if (wallet.isBlocked)
-      return res.status(403).json({ message: "Wallet is blocked" });
+    // Target user (sender)
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ message: "Target user not found" });
+    }
 
+    // Sender wallet (create if missing)
+    const userWallet =
+      (await Wallet.findOne({ user: targetUser._id })) ||
+      (await Wallet.create({ user: targetUser._id, balance: 0 }));
+
+    if (userWallet.isBlocked) {
+      return res.status(403).json({ message: "User wallet is blocked" });
+    }
+
+    // Balance check for user
+    if (userWallet.balance < amount) {
+      return res.status(400).json({ message: "Insufficient user balance" });
+    }
+
+    // Agent wallet (receiver = authenticated caller)
+    const agentId = (req as any)?.user?.userId;
+    if (!agentId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const agentWallet =
+      (await Wallet.findOne({ user: agentId })) ||
+      (await Wallet.create({ user: agentId, balance: 0 }));
+
+    if (agentWallet.isBlocked) {
+      return res.status(403).json({ message: "Agent wallet is blocked" });
+    }
+
+    // 1) decrement user, 2) increment agent
     await Wallet.updateOne(
-      { _id: wallet._id },
-      { $inc: { balance: parsed.data.amount } }
+      { _id: userWallet._id },
+      { $inc: { balance: -amount } }
     );
 
-    // ✅ Include agent/admin as sender so it appears in their own feed
-    await Transaction.create({
-      sender: req.user.userId, // <— agent/admin
-      receiver: target._id, // <— user
-      amount: parsed.data.amount,
-      type: "deposit",
-      status: "completed",
-    });
-
-    return res.status(200).json({ message: "Cash-in successful" });
-  } catch {
-    return res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-// ---------- POST /api/transactions/cash-out (agent/admin → user) ----------
-export const cashOut = async (req: Authed, res: Response) => {
-  try {
-    if (!req.user?.userId)
-      return res.status(401).json({ message: "Unauthorized" });
-
-    const rawUser = (req.body?.username ?? req.body?.recipient) as
-      | string
-      | undefined;
-    const amtRaw = req.body?.amount;
-    const parsed = transactionSchema.safeParse({
-      username: rawUser,
-      amount: amtRaw,
-    });
-    if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ message: "Invalid input", errors: parsed.error.flatten() });
-    }
-
-    const target = await findUserByAny(parsed.data.username);
-    if (!target) return res.status(404).json({ message: "User not found" });
-
-    const wallet = await Wallet.findOne({ user: target._id });
-    if (!wallet || wallet.isBlocked) {
-      return res.status(403).json({ message: "Wallet is unavailable" });
-    }
-    if (wallet.balance < parsed.data.amount) {
-      return res.status(400).json({ message: "Insufficient balance" });
-    }
-
     await Wallet.updateOne(
-      { _id: wallet._id },
-      { $inc: { balance: -parsed.data.amount } }
+      { _id: agentWallet._id },
+      { $inc: { balance: amount } }
     );
 
-    // ✅ Include agent/admin as receiver so it appears in their own feed
-    await Transaction.create({
-      sender: target._id, // <— user
-      receiver: req.user.userId, // <— agent/admin
-      amount: parsed.data.amount,
-      type: "withdraw",
-      status: "completed",
+    // Log transaction
+    const tx = await Transaction.create({
+      amount,
+      sender: targetUser._id,
+      receiver: agentId,
+      type: "CASH_OUT",
+      status: "COMPLETED",
     });
 
-    return res.status(200).json({ message: "Cash-out successful" });
-  } catch {
+    // Return minimal info
+    const [freshAgentWallet, freshUserWallet] = await Promise.all([
+      Wallet.findById(agentWallet._id),
+      Wallet.findById(userWallet._id),
+    ]);
+
+    return res.status(201).json({
+      message: "Cash-out successful",
+      transaction: tx,
+      agentWallet: {
+        id: freshAgentWallet?._id,
+        balance: freshAgentWallet?.balance,
+      },
+      userWallet: {
+        id: freshUserWallet?._id,
+        balance: freshUserWallet?.balance,
+      },
+    });
+  } catch (err) {
+    console.error("cashOut error:", err);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
